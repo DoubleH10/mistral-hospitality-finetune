@@ -211,7 +211,7 @@ def build_ui() -> gr.Blocks:
                     "<b>Params:</b> ~0.3% trainable<br><br>"
                     '<a href="https://huggingface.co/Hadix10/mistral-hospitality-qlora" '
                     'target="_blank">Model Card</a> · '
-                    '<a href="https://github.com/Hadix10/mistral-hospitality-finetune" '
+                    '<a href="https://github.com/DoubleH10/mistral-hospitality-finetune" '
                     'target="_blank">GitHub</a>'
                     "</div>"
                 )
