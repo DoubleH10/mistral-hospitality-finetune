@@ -90,8 +90,8 @@ CSS = """
     color: white;
     text-align: center;
 }
-.header h1 { margin: 0; font-size: 1.6rem; }
-.header p  { margin: 0.3rem 0 0; opacity: 0.8; font-size: 0.95rem; }
+.header h1 { margin: 0; font-size: 1.8rem; font-weight: 700; color: #ffffff; text-shadow: 0 2px 4px rgba(0,0,0,0.5); }
+.header p  { margin: 0.5rem 0 0; font-size: 1rem; color: #e0e0e0; text-shadow: 0 1px 3px rgba(0,0,0,0.4); }
 
 .sidebar {
     background: #f8f9fa;
