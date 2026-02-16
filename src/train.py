@@ -170,7 +170,12 @@ def load_and_prepare_data(config: Config) -> DatasetDict:
         train_ds = train_ds.select(range(config.max_train_samples))
     if len(val_ds) > config.max_val_samples:
         val_ds = val_ds.select(range(config.max_val_samples))
-    
+
+    # Remove any val duplicates that also appear in train
+    # (source datasets contain duplicate rows across splits)
+    train_texts = set(train_ds["text"])
+    val_ds = val_ds.filter(lambda ex: ex["text"] not in train_texts)
+
     print(f"Final dataset: {len(train_ds)} train, {len(val_ds)} val")
     
     return DatasetDict({"train": train_ds, "validation": val_ds})
