@@ -21,7 +21,7 @@ datasets:
 A fine-tuned Mistral-7B model for hotel booking dialogs and hospitality FAQ, running on ZeroGPU.
 
 **Model:** [Hadix10/mistral-hospitality-qlora](https://huggingface.co/Hadix10/mistral-hospitality-qlora)
-**Code:** [GitHub](https://github.com/Hadix10/mistral-hospitality-finetune)
+**Code:** [GitHub](https://github.com/DoubleH10/mistral-hospitality-finetune)
 
 ## Features
 
