@@ -1,64 +1,27 @@
 """
 Gradio demo for Mistral Hospitality Assistant.
 
-Self-contained — no imports from src/ so it runs standalone on HF Spaces.
+Uses the HF Inference API — runs on free CPU hardware, no GPU required.
+Set the HF_TOKEN secret in Space settings for gated-model access.
 
 Usage:
-    python demo/app.py            # local
+    python demo/app.py            # local  (needs HF_TOKEN env var)
     gradio demo/app.py            # auto-reload
 """
 
 import os
-from threading import Thread
 
-import torch
 import gradio as gr
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    BitsAndBytesConfig,
-    TextIteratorStreamer,
-)
-from peft import PeftModel
+from huggingface_hub import InferenceClient
 
 # ---------------------------------------------------------------------------
-# Model loading (duplicated from src/inference.py for HF Spaces portability)
+# Inference API client
 # ---------------------------------------------------------------------------
 MODEL_ID = os.getenv("MODEL_ID", "Hadix10/mistral-hospitality-qlora")
-BASE_MODEL = os.getenv("BASE_MODEL", "mistralai/Mistral-7B-Instruct-v0.3")
-
-_model = None
-_tokenizer = None
-
-
-def get_model():
-    global _model, _tokenizer
-    if _model is not None:
-        return _model, _tokenizer
-
-    _tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, use_fast=True)
-    if _tokenizer.pad_token is None:
-        _tokenizer.pad_token = _tokenizer.eos_token
-
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_compute_dtype=torch.bfloat16,
-        bnb_4bit_use_double_quant=True,
-        bnb_4bit_quant_type="nf4",
-    )
-    _model = AutoModelForCausalLM.from_pretrained(
-        BASE_MODEL,
-        quantization_config=bnb_config,
-        device_map="auto",
-        trust_remote_code=True,
-    )
-    _model = PeftModel.from_pretrained(_model, MODEL_ID)
-    _model.eval()
-    return _model, _tokenizer
-
+client = InferenceClient(model=MODEL_ID, token=os.getenv("HF_TOKEN"))
 
 # ---------------------------------------------------------------------------
-# Prompt formatting
+# Prompt formatting (matches the [INST] format used during fine-tuning)
 # ---------------------------------------------------------------------------
 MODE_PREFIXES = {
     "Auto": "",
@@ -66,33 +29,24 @@ MODE_PREFIXES = {
     "FAQ": "",
 }
 
-MAX_CONTEXT_TOKENS = 800
-
 
 def build_prompt(message: str, history: list[dict], mode: str) -> str:
-    """Build [INST] prompt with sliding-window multi-turn context."""
-    _, tokenizer = get_model()
-
+    """Build [INST] prompt with multi-turn context."""
     prefix = MODE_PREFIXES.get(mode, "")
 
-    # Build conversation context from history
     turns = []
     for msg in history:
-        role = msg["role"]
-        text = msg["content"]
-        if role == "user":
-            turns.append(f"User: {text}")
+        if msg["role"] == "user":
+            turns.append(f"User: {msg['content']}")
         else:
-            turns.append(f"Assistant: {text}")
+            turns.append(f"Assistant: {msg['content']}")
     turns.append(f"User: {message}")
 
     context = "\n".join(turns)
 
-    # Sliding window: trim from the front if too long
-    tokens = tokenizer.encode(context)
-    if len(tokens) > MAX_CONTEXT_TOKENS:
-        context = tokenizer.decode(tokens[-MAX_CONTEXT_TOKENS:], skip_special_tokens=True)
-        # Re-align to line boundary
+    # Character-level sliding window (~800 tokens ≈ 3 200 chars)
+    if len(context) > 3200:
+        context = context[-3200:]
         if "\n" in context:
             context = context[context.index("\n") + 1 :]
 
@@ -101,35 +55,27 @@ def build_prompt(message: str, history: list[dict], mode: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Streaming generation
+# Streaming generation via Inference API
 # ---------------------------------------------------------------------------
 def respond(history: list[dict], mode: str, temperature: float, max_tokens: int):
-    # Last user message was appended to history by the submit handler
     message = history[-1]["content"]
     preceding = history[:-1]
-    model, tokenizer = get_model()
     prompt = build_prompt(message, preceding, mode)
 
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-    streamer = TextIteratorStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
-
-    gen_kwargs = {
-        **inputs,
-        "max_new_tokens": int(max_tokens),
-        "temperature": temperature if temperature > 0 else 1.0,
-        "do_sample": temperature > 0,
-        "top_p": 0.9,
-        "pad_token_id": tokenizer.eos_token_id,
-        "streamer": streamer,
-    }
-
-    thread = Thread(target=model.generate, kwargs=gen_kwargs)
-    thread.start()
-
     partial = ""
-    for token in streamer:
-        partial += token
-        yield history + [{"role": "assistant", "content": partial}]
+    try:
+        for token in client.text_generation(
+            prompt,
+            max_new_tokens=int(max_tokens),
+            temperature=max(temperature, 0.01),
+            top_p=0.9,
+            stream=True,
+        ):
+            partial += token
+            yield history + [{"role": "assistant", "content": partial}]
+    except Exception as e:
+        error_msg = f"Inference error: {e}"
+        yield history + [{"role": "assistant", "content": error_msg}]
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +135,10 @@ def build_ui() -> gr.Blocks:
                     height=520,
                     type="messages",
                     show_copy_button=True,
-                    avatar_images=(None, "https://huggingface.co/datasets/huggingface/brand-assets/resolve/main/hf-logo.svg"),
+                    avatar_images=(
+                        None,
+                        "https://huggingface.co/datasets/huggingface/brand-assets/resolve/main/hf-logo.svg",
+                    ),
                 )
                 chat_input = gr.Textbox(
                     placeholder="Ask about hotel services, bookings, policies...",
