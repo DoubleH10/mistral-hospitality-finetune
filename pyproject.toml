@@ -1,0 +1,68 @@
+[project]
+name = "mistral-hospitality-finetune"
+version = "0.1.0"
+description = "End-to-end QLoRA fine-tuning of Mistral-7B for hospitality domain: training, evaluation, API, and frontend"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Hadi Hijazi", email = "hijazi.hadi@gmail.com" }
+]
+keywords = ["llm", "fine-tuning", "qlora", "mistral", "hospitality", "peft"]
+
+dependencies = [
+    "torch>=2.1.0",
+    "transformers>=4.44.0",
+    "datasets>=2.20.0",
+    "accelerate>=0.33.0",
+    "peft>=0.12.0",
+    "trl>=0.9.0",
+    "bitsandbytes>=0.43.0",
+    "sentencepiece>=0.2.0",
+    "huggingface-hub>=0.24.0",
+    "einops>=0.8.0",
+]
+
+[project.optional-dependencies]
+api = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.30.0",
+    "sse-starlette>=2.0.0",  # For streaming responses
+]
+eval = [
+    "rouge-score>=0.1.2",
+    "nltk>=3.8.0",
+    "scikit-learn>=1.5.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.5.0",
+    "ipykernel>=6.29.0",
+]
+all = [
+    "mistral-hospitality-finetune[api,eval,dev]",
+]
+
+[project.urls]
+Repository = "https://github.com/DoubleH10/mistral-hospitality-finetune"
+
+[project.scripts]
+train = "src.train:main"
+evaluate = "src.evaluate:main"
+serve = "api.main:run"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+ignore = ["E501"]  # Line too long - handled by formatter
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
