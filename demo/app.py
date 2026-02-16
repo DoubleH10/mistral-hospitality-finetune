@@ -1,27 +1,60 @@
 """
 Gradio demo for Mistral Hospitality Assistant.
 
-Uses the HF Inference API — runs on free CPU hardware, no GPU required.
+Runs the fine-tuned QLoRA model on ZeroGPU (free A10G).
 Set the HF_TOKEN secret in Space settings for gated-model access.
 
 Usage:
-    python demo/app.py            # local  (needs HF_TOKEN env var)
+    python demo/app.py            # local (needs GPU + HF_TOKEN env var)
     gradio demo/app.py            # auto-reload
 """
 
 import os
 
+import spaces
+import torch
 import gradio as gr
-from huggingface_hub import InferenceClient
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from peft import PeftModel
 
 # ---------------------------------------------------------------------------
-# Inference API client
+# Model loading (lazy — first call triggers download + quantisation)
 # ---------------------------------------------------------------------------
 MODEL_ID = os.getenv("MODEL_ID", "Hadix10/mistral-hospitality-qlora")
-client = InferenceClient(model=MODEL_ID, token=os.getenv("HF_TOKEN"))
+BASE_MODEL = os.getenv("BASE_MODEL", "mistralai/Mistral-7B-Instruct-v0.3")
+
+_model = None
+_tokenizer = None
+
+
+def get_model():
+    global _model, _tokenizer
+    if _model is not None:
+        return _model, _tokenizer
+
+    _tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, use_fast=True)
+    if _tokenizer.pad_token is None:
+        _tokenizer.pad_token = _tokenizer.eos_token
+
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_quant_type="nf4",
+    )
+    _model = AutoModelForCausalLM.from_pretrained(
+        BASE_MODEL,
+        quantization_config=bnb_config,
+        device_map="auto",
+        trust_remote_code=True,
+    )
+    _model = PeftModel.from_pretrained(_model, MODEL_ID)
+    _model.eval()
+    return _model, _tokenizer
+
 
 # ---------------------------------------------------------------------------
-# Prompt formatting (matches the [INST] format used during fine-tuning)
+# Prompt formatting (matches fine-tuning [INST] format)
 # ---------------------------------------------------------------------------
 MODE_PREFIXES = {
     "Auto": "",
@@ -29,9 +62,12 @@ MODE_PREFIXES = {
     "FAQ": "",
 }
 
+MAX_CONTEXT_TOKENS = 800
+
 
 def build_prompt(message: str, history: list[dict], mode: str) -> str:
-    """Build [INST] prompt with multi-turn context."""
+    """Build [INST] prompt with sliding-window multi-turn context."""
+    model, tokenizer = get_model()
     prefix = MODE_PREFIXES.get(mode, "")
 
     turns = []
@@ -41,12 +77,11 @@ def build_prompt(message: str, history: list[dict], mode: str) -> str:
         else:
             turns.append(f"Assistant: {msg['content']}")
     turns.append(f"User: {message}")
-
     context = "\n".join(turns)
 
-    # Character-level sliding window (~800 tokens ≈ 3 200 chars)
-    if len(context) > 3200:
-        context = context[-3200:]
+    tokens = tokenizer.encode(context)
+    if len(tokens) > MAX_CONTEXT_TOKENS:
+        context = tokenizer.decode(tokens[-MAX_CONTEXT_TOKENS:], skip_special_tokens=True)
         if "\n" in context:
             context = context[context.index("\n") + 1 :]
 
@@ -55,27 +90,34 @@ def build_prompt(message: str, history: list[dict], mode: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Streaming generation via Inference API
+# GPU-accelerated generation (ZeroGPU gives a free A10G per call)
 # ---------------------------------------------------------------------------
+@spaces.GPU(duration=120)
+def generate_response(prompt: str, max_tokens: int, temperature: float) -> str:
+    model, tokenizer = get_model()
+    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    with torch.no_grad():
+        output = model.generate(
+            **inputs,
+            max_new_tokens=int(max_tokens),
+            temperature=temperature if temperature > 0 else 1.0,
+            do_sample=temperature > 0,
+            top_p=0.9,
+            pad_token_id=tokenizer.eos_token_id,
+        )
+    generated = output[0][inputs["input_ids"].shape[1] :]
+    return tokenizer.decode(generated, skip_special_tokens=True)
+
+
 def respond(history: list[dict], mode: str, temperature: float, max_tokens: int):
     message = history[-1]["content"]
     preceding = history[:-1]
     prompt = build_prompt(message, preceding, mode)
-
-    partial = ""
     try:
-        for token in client.text_generation(
-            prompt,
-            max_new_tokens=int(max_tokens),
-            temperature=max(temperature, 0.01),
-            top_p=0.9,
-            stream=True,
-        ):
-            partial += token
-            yield history + [{"role": "assistant", "content": partial}]
+        response = generate_response(prompt, max_tokens, temperature)
     except Exception as e:
-        error_msg = f"Inference error: {e}"
-        yield history + [{"role": "assistant", "content": error_msg}]
+        response = f"Inference error: {e}"
+    yield history + [{"role": "assistant", "content": response}]
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +162,6 @@ EXAMPLES = [
 # ---------------------------------------------------------------------------
 def build_ui() -> gr.Blocks:
     with gr.Blocks(css=CSS, title="Mistral Hospitality Assistant") as demo:
-        # Header
         gr.HTML(
             '<div class="header">'
             "<h1>Mistral Hospitality Assistant</h1>"
@@ -129,7 +170,6 @@ def build_ui() -> gr.Blocks:
         )
 
         with gr.Row():
-            # Main chat panel
             with gr.Column(scale=3):
                 chatbot = gr.Chatbot(
                     height=520,
@@ -145,12 +185,8 @@ def build_ui() -> gr.Blocks:
                     show_label=False,
                     container=False,
                 )
-                gr.Examples(
-                    examples=EXAMPLES,
-                    inputs=chat_input,
-                )
+                gr.Examples(examples=EXAMPLES, inputs=chat_input)
 
-            # Sidebar
             with gr.Column(scale=1, min_width=240):
                 mode = gr.Radio(
                     choices=["Auto", "Booking Dialog", "FAQ"],
@@ -180,7 +216,6 @@ def build_ui() -> gr.Blocks:
                     "</div>"
                 )
 
-        # Wire up chat
         chat_input.submit(
             lambda msg, hist: ("", hist + [{"role": "user", "content": msg}]),
             inputs=[chat_input, chatbot],
@@ -194,9 +229,6 @@ def build_ui() -> gr.Blocks:
     return demo
 
 
-# ---------------------------------------------------------------------------
-# Launch
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     demo = build_ui()
     demo.launch(server_name="0.0.0.0", server_port=7860)

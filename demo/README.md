@@ -8,6 +8,7 @@ sdk_version: 5.9.1
 app_file: app.py
 pinned: false
 license: mit
+hardware: zero-a10g
 models:
   - Hadix10/mistral-hospitality-qlora
 datasets:
@@ -17,15 +18,14 @@ datasets:
 
 # Mistral Hospitality Assistant
 
-A fine-tuned Mistral-7B model for hotel booking dialogs and hospitality FAQ, powered by the HF Inference API.
+A fine-tuned Mistral-7B model for hotel booking dialogs and hospitality FAQ, running on ZeroGPU.
 
 **Model:** [Hadix10/mistral-hospitality-qlora](https://huggingface.co/Hadix10/mistral-hospitality-qlora)
 **Code:** [GitHub](https://github.com/Hadix10/mistral-hospitality-finetune)
 
 ## Features
 
-- Streaming responses via HF Inference API
-- Multi-turn chat with sliding-window context
+- Runs your fine-tuned QLoRA model on free ZeroGPU (A10G)
+- Multi-turn chat with sliding-window context (800 tokens)
 - Mode selector: Auto / Booking Dialog / FAQ
 - Temperature and max-tokens controls
-- Runs on free CPU hardware (no GPU required)
