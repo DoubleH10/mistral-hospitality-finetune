@@ -26,6 +26,8 @@ A third dataset (hotel reviews) was evaluated but excluded due to lack of gold l
 
 *Evaluated on 200 held-out validation samples. Run `uv run evaluate` to reproduce.*
 
+A merged (adapter-free) model is also available: [`Hadix10/mistral-hospitality-merged`](https://huggingface.co/Hadix10/mistral-hospitality-merged)
+
 ### Before / After Examples
 
 **FAQ — "What are the check-in and check-out times?"**
@@ -98,9 +100,61 @@ uv run train --push_to_hub --hub_model_id YOUR_USERNAME/mistral-hospitality-qlor
 # Evaluate
 uv run evaluate --model_path Hadix10/mistral-hospitality-qlora
 
+# Merge adapter into base model (produces standalone model)
+uv run merge --adapter_path Hadix10/mistral-hospitality-qlora
+
 # Inference
 uv run python src/inference.py --model_path Hadix10/mistral-hospitality-qlora --test
 ```
+
+### Merge Adapter
+
+Merge the LoRA adapter into the base model for standalone deployment (no PEFT dependency at inference time):
+
+```bash
+# Merge and push to HuggingFace Hub
+uv run merge --adapter_path Hadix10/mistral-hospitality-qlora
+
+# Merge and save locally only
+uv run merge --adapter_path ./outputs/mistral-hospitality-qlora --save_local ./merged --no_push
+
+# Full options
+uv run merge --help
+```
+
+> **Note:** Merging loads the base model in bf16 (not quantized) and requires ~14GB RAM. The merged model can be quantized at serving time.
+
+### Tests
+
+```bash
+uv sync --extra dev
+uv run pytest -v
+```
+
+Tests cover data processing, prompt formatting, and API endpoints. All tests run on CPU — API tests use mock objects.
+
+### W&B Integration
+
+Track training metrics with [Weights & Biases](https://wandb.ai):
+
+```bash
+uv sync --extra logging
+uv run train --wandb_project mistral-hospitality --wandb_run_name "experiment-1"
+```
+
+When `--wandb_project` is not set, training works exactly as before with no W&B dependency.
+
+### LLM-as-Judge Evaluation
+
+Score model responses using Gemini as a judge (helpfulness, accuracy, tone on a 1-5 scale):
+
+```bash
+uv sync --extra eval
+export GOOGLE_API_KEY=your_key_here
+python src/evaluate_llm.py --model_path Hadix10/mistral-hospitality-qlora --max_samples 50
+```
+
+Results are saved to `outputs/llm_eval_results.json`.
 
 ### API Server
 
@@ -141,20 +195,27 @@ Open `notebooks/Mistral_QLoRA.ipynb` in Google Colab. The first cell clones this
 
 ```
 ├── src/
-│   ├── train.py          # QLoRA training pipeline
-│   ├── inference.py       # Local inference + interactive mode
-│   └── evaluate.py        # Perplexity + ROUGE evaluation
+│   ├── train.py            # QLoRA training pipeline (+ W&B logging)
+│   ├── inference.py         # Local inference + interactive mode
+│   ├── evaluate.py          # Perplexity + ROUGE evaluation
+│   ├── evaluate_llm.py      # LLM-as-Judge evaluation (Gemini)
+│   └── merge.py             # Merge LoRA adapter into base model
+├── tests/
+│   ├── conftest.py          # Shared fixtures
+│   ├── test_data.py         # Data processing tests
+│   ├── test_inference.py    # Prompt formatting tests
+│   └── test_api.py          # API endpoint tests (mocked)
 ├── api/
-│   └── main.py            # FastAPI server with SSE streaming
+│   └── main.py              # FastAPI server with SSE streaming
 ├── demo/
-│   ├── app.py             # Gradio demo (self-contained for HF Spaces)
-│   ├── requirements.txt   # HF Spaces dependencies
-│   └── README.md          # HF Space metadata
+│   ├── app.py               # Gradio demo (self-contained for HF Spaces)
+│   ├── requirements.txt     # HF Spaces dependencies
+│   └── README.md            # HF Space metadata
 ├── notebooks/
 │   └── Mistral_QLoRA.ipynb  # Exploration notebook (Colab-ready)
-├── outputs/               # Training artifacts (.gitignored)
-├── pyproject.toml         # Single source of truth for deps
-└── uv.lock                # Pinned dependency versions
+├── outputs/                 # Training artifacts (.gitignored)
+├── pyproject.toml           # Single source of truth for deps
+└── uv.lock                  # Pinned dependency versions
 ```
 
 ## Training Details

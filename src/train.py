@@ -24,6 +24,13 @@ from transformers import (
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
 
+try:
+    import wandb
+
+    _WANDB_AVAILABLE = True
+except ImportError:
+    _WANDB_AVAILABLE = False
+
 
 # ============================================================
 # CONFIG - All hyperparameters in one place
@@ -244,7 +251,9 @@ def load_model_and_tokenizer(config: Config):
 def train(
     config: Config,
     push_to_hub: bool = False,
-    hub_model_id: Optional[str] = None
+    hub_model_id: Optional[str] = None,
+    wandb_project: Optional[str] = None,
+    wandb_run_name: Optional[str] = None,
 ):
     """
     Main training function.
@@ -265,6 +274,29 @@ def train(
         tokenizer=tokenizer,
     )
     
+    # W&B logging (optional — enabled when --wandb_project is set)
+    use_wandb = wandb_project and _WANDB_AVAILABLE
+    if wandb_project and not _WANDB_AVAILABLE:
+        print("Warning: --wandb_project set but wandb not installed. Install with: uv sync --extra logging")
+    if use_wandb:
+        wandb.init(
+            project=wandb_project,
+            name=wandb_run_name or f"qlora-r{config.lora_r}-lr{config.learning_rate}",
+            config={
+                "base_model": config.base_model,
+                "lora_r": config.lora_r,
+                "lora_alpha": config.lora_alpha,
+                "lora_dropout": config.lora_dropout,
+                "max_seq_length": config.max_seq_length,
+                "batch_size": config.batch_size,
+                "gradient_accumulation_steps": config.gradient_accumulation_steps,
+                "effective_batch_size": config.batch_size * config.gradient_accumulation_steps,
+                "learning_rate": config.learning_rate,
+                "num_train_epochs": config.num_train_epochs,
+                "warmup_ratio": config.warmup_ratio,
+            },
+        )
+
     # Training arguments
     training_args = TrainingArguments(
         output_dir=config.output_dir,
@@ -285,7 +317,7 @@ def train(
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
         greater_is_better=False,
-        report_to="none",
+        report_to="wandb" if use_wandb else "none",
         push_to_hub=push_to_hub,
         hub_model_id=hub_model_id,
     )
@@ -317,14 +349,19 @@ def train(
     # Print final metrics
     metrics = trainer.evaluate()
     ppl = math.exp(metrics["eval_loss"])
-    
+
     print("\n" + "="*60)
     print("Training complete!")
     print(f"  Final eval loss: {metrics['eval_loss']:.4f}")
     print(f"  Perplexity: {ppl:.2f}")
     print(f"  Model saved to: {config.output_dir}")
     print("="*60 + "\n")
-    
+
+    # Log final metrics and close W&B run
+    if use_wandb:
+        wandb.log({"final_eval_loss": metrics["eval_loss"], "final_perplexity": ppl})
+        wandb.finish()
+
     return trainer
 
 
@@ -352,19 +389,37 @@ def main():
         default=None,
         help="Override default output directory"
     )
+    parser.add_argument(
+        "--wandb_project",
+        type=str,
+        default=None,
+        help="Weights & Biases project name (enables W&B logging)"
+    )
+    parser.add_argument(
+        "--wandb_run_name",
+        type=str,
+        default=None,
+        help="Weights & Biases run name (optional, auto-generated if not set)"
+    )
     args = parser.parse_args()
-    
+
     # Initialize config
     config = Config()
-    
+
     if args.output_dir:
         config.output_dir = args.output_dir
-    
+
     if args.push_to_hub and not args.hub_model_id:
         raise ValueError("--hub_model_id required when --push_to_hub is set")
-    
+
     # Run training
-    train(config, push_to_hub=args.push_to_hub, hub_model_id=args.hub_model_id)
+    train(
+        config,
+        push_to_hub=args.push_to_hub,
+        hub_model_id=args.hub_model_id,
+        wandb_project=args.wandb_project,
+        wandb_run_name=args.wandb_run_name,
+    )
 
 
 if __name__ == "__main__":

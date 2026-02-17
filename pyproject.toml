@@ -33,6 +33,10 @@ eval = [
     "rouge-score>=0.1.2",
     "nltk>=3.8.0",
     "scikit-learn>=1.5.0",
+    "google-genai>=1.0.0",
+]
+logging = [
+    "wandb>=0.16.0",
 ]
 demo = [
     "gradio>=4.44.0",
@@ -43,7 +47,7 @@ dev = [
     "ipykernel>=6.29.0",
 ]
 all = [
-    "mistral-hospitality-finetune[api,eval,demo,dev]",
+    "mistral-hospitality-finetune[api,eval,demo,dev,logging]",
 ]
 
 [project.urls]
@@ -52,7 +56,12 @@ Repository = "https://github.com/Hadix10/mistral-hospitality-finetune"
 [project.scripts]
 train = "src.train:main"
 evaluate = "src.evaluate:main"
+merge = "src.merge:main"
 serve = "api.main:run"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 100
