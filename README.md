@@ -28,6 +28,12 @@ A third dataset (hotel reviews) was evaluated but excluded due to lack of gold l
 
 A merged (adapter-free) model is also available: [`Hadix10/mistral-hospitality-merged`](https://huggingface.co/Hadix10/mistral-hospitality-merged)
 
+### Live Demo
+
+[![HF Space](https://img.shields.io/badge/%F0%9F%A4%97%20Spaces-Demo-blue)](https://huggingface.co/spaces/Hadix10/mistral-hospitality-assistant)
+
+![Demo Screenshot](assets/demo-screenshot.png)
+
 ### Before / After Examples
 
 **FAQ — "What are the check-in and check-out times?"**

@@ -18,24 +18,33 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from peft import PeftModel
 
 # ---------------------------------------------------------------------------
-# Model loading (lazy — first call triggers download + quantisation)
+# Config
 # ---------------------------------------------------------------------------
 MODEL_ID = os.getenv("MODEL_ID", "Hadix10/mistral-hospitality-qlora")
 BASE_MODEL = os.getenv("BASE_MODEL", "mistralai/Mistral-7B-Instruct-v0.3")
 
+# ---------------------------------------------------------------------------
+# Tokenizer — loaded eagerly at startup (no GPU needed)
+# ---------------------------------------------------------------------------
+print(f"Loading tokenizer from {MODEL_ID}...")
+_tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, use_fast=True)
+if _tokenizer.pad_token is None:
+    _tokenizer.pad_token = _tokenizer.eos_token
+print("Tokenizer ready.")
+
+# ---------------------------------------------------------------------------
+# Model — loaded lazily inside @spaces.GPU context
+# ---------------------------------------------------------------------------
 _model = None
-_tokenizer = None
 
 
 def get_model():
-    global _model, _tokenizer
+    """Load model on first GPU call. Cached for subsequent calls."""
+    global _model
     if _model is not None:
-        return _model, _tokenizer
+        return _model
 
-    _tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, use_fast=True)
-    if _tokenizer.pad_token is None:
-        _tokenizer.pad_token = _tokenizer.eos_token
-
+    print(f"Loading base model {BASE_MODEL}...")
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_compute_dtype=torch.bfloat16,
@@ -48,9 +57,11 @@ def get_model():
         device_map="auto",
         trust_remote_code=True,
     )
+    print(f"Loading adapter from {MODEL_ID}...")
     _model = PeftModel.from_pretrained(_model, MODEL_ID)
     _model.eval()
-    return _model, _tokenizer
+    print("Model ready.")
+    return _model
 
 
 # ---------------------------------------------------------------------------
@@ -67,7 +78,6 @@ MAX_CONTEXT_TOKENS = 800
 
 def build_prompt(message: str, history: list[dict], mode: str) -> str:
     """Build [INST] prompt with sliding-window multi-turn context."""
-    model, tokenizer = get_model()
     prefix = MODE_PREFIXES.get(mode, "")
 
     turns = []
@@ -79,9 +89,10 @@ def build_prompt(message: str, history: list[dict], mode: str) -> str:
     turns.append(f"User: {message}")
     context = "\n".join(turns)
 
-    tokens = tokenizer.encode(context)
+    # Use tokenizer (loaded at startup) for token counting
+    tokens = _tokenizer.encode(context)
     if len(tokens) > MAX_CONTEXT_TOKENS:
-        context = tokenizer.decode(tokens[-MAX_CONTEXT_TOKENS:], skip_special_tokens=True)
+        context = _tokenizer.decode(tokens[-MAX_CONTEXT_TOKENS:], skip_special_tokens=True)
         if "\n" in context:
             context = context[context.index("\n") + 1 :]
 
@@ -94,8 +105,8 @@ def build_prompt(message: str, history: list[dict], mode: str) -> str:
 # ---------------------------------------------------------------------------
 @spaces.GPU(duration=120)
 def generate_response(prompt: str, max_tokens: int, temperature: float) -> str:
-    model, tokenizer = get_model()
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    model = get_model()
+    inputs = _tokenizer(prompt, return_tensors="pt").to(model.device)
     with torch.no_grad():
         output = model.generate(
             **inputs,
@@ -103,10 +114,10 @@ def generate_response(prompt: str, max_tokens: int, temperature: float) -> str:
             temperature=temperature if temperature > 0 else 1.0,
             do_sample=temperature > 0,
             top_p=0.9,
-            pad_token_id=tokenizer.eos_token_id,
+            pad_token_id=_tokenizer.eos_token_id,
         )
     generated = output[0][inputs["input_ids"].shape[1] :]
-    return tokenizer.decode(generated, skip_special_tokens=True)
+    return _tokenizer.decode(generated, skip_special_tokens=True)
 
 
 def respond(history: list[dict], mode: str, temperature: float, max_tokens: int):
@@ -231,4 +242,4 @@ def build_ui() -> gr.Blocks:
 
 if __name__ == "__main__":
     demo = build_ui()
-    demo.launch(server_name="0.0.0.0", server_port=7860)
+    demo.launch(server_name="0.0.0.0", server_port=7860, show_error=True)
